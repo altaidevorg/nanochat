@@ -4,7 +4,7 @@ Notable features:
 - rotary embeddings (and no positional embeddings)
 - QK norm
 - untied weights for token embedding and lm_head
-- relu^2 activation in MLP
+- SwiGLU in MLP
 - norm after token embedding
 - no learnable params in rmsnorm
 - no bias in linear layers
@@ -31,6 +31,7 @@ class GPTConfig:
     n_head: int = 6 # number of query heads
     n_kv_head: int = 6 # number of key/value heads (MQA)
     n_embd: int = 768
+    weight_sharing: bool = False
 
 
 def norm(x):
@@ -111,15 +112,17 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
+    """Standard SwiGLU implementation"""
+
     def __init__(self, config):
         super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+        self.up_gate_proj = nn.Linear(config.n_embd, 6 * config.n_embd, bias=False)
+        self.down_proj = nn.Linear(3 * config.n_embd, config.n_embd, bias=False)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = F.relu(x).square()
-        x = self.c_proj(x)
+        up, gates = self.up_gate_proj(x).chunk(2, dim=-1)
+        x = up * F.silu(gates)
+        x = self.down_proj(x)
         return x
 
 
@@ -144,6 +147,9 @@ class GPT(nn.Module):
             "h": nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layer)]),
         })
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # if weight sharing is desired, set weight matrix to embedding weight matrix
+        if config.weight_sharing:
+            self.lm_head.weight = self.transformer.wte.weight
         # To support meta device initialization, we init the rotary embeddings here, but it's fake
         # As for rotary_seq_len, these rotary embeddings are pretty small/cheap in memory,
         # so let's just over-compute them, but assert fail if we ever reach that amount.
@@ -156,11 +162,12 @@ class GPT(nn.Module):
 
     def init_weights(self):
         self.apply(self._init_weights)
-        # zero out classifier weights
-        torch.nn.init.zeros_(self.lm_head.weight)
+        # zero out classifier weights only if weight sharing is not used
+        if not self.config.weight_sharing:
+            torch.nn.init.zeros_(self.lm_head.weight)
         # zero out c_proj weights in all blocks
         for block in self.transformer.h:
-            torch.nn.init.zeros_(block.mlp.c_proj.weight)
+            torch.nn.init.zeros_(block.mlp.down_proj.weight)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
         # init the rotary embeddings
         head_dim = self.config.n_embd // self.config.n_head
@@ -224,9 +231,10 @@ class GPT(nn.Module):
         if rank == 0:
             print(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
         adam_groups = [
-            dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
-            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale),
+            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale if not self.config_weight_sharing else unembedding_lr * dmodel_lr_scale),
         ]
+        if not self.config.weight_sharing:
+            adam_groups.append(dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale))
         adamw_kwargs = dict(betas=(0.8, 0.95), eps=1e-10, weight_decay=weight_decay)
         AdamWFactory = DistAdamW if ddp else partial(torch.optim.AdamW, fused=True)
         adamw_optimizer = AdamWFactory(adam_groups, **adamw_kwargs)
