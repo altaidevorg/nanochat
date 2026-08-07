@@ -58,6 +58,9 @@ eval_tokens = 20*524288 # number of tokens to evaluate val loss on
 core_metric_every = 2000 # every how many steps to evaluate the core metric (-1 = disable)
 core_metric_max_per_task = 500 # examples per task in estimating the core metric
 sample_every = 2000 # every how many steps to sample from the model
+# Dataset / Multilingual
+datasets = "" # comma-separated dataset names, e.g. "karpathy,altai" (empty => autodetect)
+dataset_weights = "" # comma-separated relative weights, e.g. "0.7,0.3" (empty => uniform)
 # Output
 model_tag = "" # optionally override the model tag for the output checkpoint directory name
 # now allow CLI to override the settings via the configurator lol
@@ -149,8 +152,24 @@ adamw_optimizer, muon_optimizer = optimizers
 # Initialize the DataLoaders for train/val
 base_dir = get_base_dir()
 tokens_dir = os.path.join(base_dir, "tokenized_data")
-train_loader = tokenizing_distributed_data_loader(device_batch_size, max_seq_len, split="train", device=device)
-build_val_loader = lambda: tokenizing_distributed_data_loader(device_batch_size, max_seq_len, split="val", device=device)
+ds_arg = datasets if datasets else None
+weights_arg = dataset_weights if dataset_weights else None
+train_loader = tokenizing_distributed_data_loader(
+    device_batch_size,
+    max_seq_len,
+    split="train",
+    datasets=ds_arg,
+    weights=weights_arg,
+    device=device,
+)
+build_val_loader = lambda ds=None: tokenizing_distributed_data_loader(
+    device_batch_size,
+    max_seq_len,
+    split="val",
+    datasets=ds if ds else ds_arg,
+    weights=weights_arg if ds is None else None,
+    device=device,
+)
 x, y = next(train_loader) # kick off load of the very first batch of data
 
 # -----------------------------------------------------------------------------
@@ -195,12 +214,24 @@ for step in range(num_iterations + 1):
         print0(f"Step {step:05d} | Validation bpb: {val_bpb:.4f}")
         if val_bpb < min_val_bpb:
             min_val_bpb = val_bpb
-        wandb_run.log({
+        log_dict = {
             "step": step,
             "total_training_flops": flops_so_far,
             "total_training_time": total_training_time,
             "val/bpb": val_bpb,
-        })
+        }
+        # evaluate per-dataset val loss if multiple datasets configured
+        if ds_arg and isinstance(ds_arg, str) and "," in ds_arg:
+            ds_list = [d.strip() for d in ds_arg.split(",")]
+            for ds in ds_list:
+                ds_val_loader = build_val_loader(ds=[ds])
+                ds_eval_steps = max(1, eval_steps // len(ds_list))
+                with autocast_ctx:
+                    ds_val_bpb = evaluate_bpb(model, ds_val_loader, ds_eval_steps, token_bytes)
+                print0(f"Step {step:05d} | Validation bpb ({ds}): {ds_val_bpb:.4f}")
+                log_dict[f"val/bpb/{ds}"] = ds_val_bpb
+
+        wandb_run.log(log_dict)
         model.train()
 
     # once in a while: estimate the CORE metric (all ranks participate)

@@ -65,11 +65,13 @@ uv run maturin develop --release --manifest-path rustbpe/Cargo.toml
 python -m nanochat.dataset --dataset karpathy -n 6
 python -m nanochat.dataset --dataset altai -n 4
 # Immediately also kick off downloading more shards in the background while tokenizer trains
-# See comment below for why 240 is the right number here
-python -m nanochat.dataset -n 240 &
-DATASET_DOWNLOAD_PID=$!
+python -m nanochat.dataset --dataset karpathy -n 240 &
+PID1=$!
+python -m nanochat.dataset --dataset altai -n 90 &
+PID2=$!
+
 # train the tokenizer with vocab size 2**16 = 65536 on ~2B characters of data
-python -m scripts.tok_train --max_chars=2500000000
+python -m scripts.tok_train --max_chars=2500000000 --datasets=karpathy,altai --dataset_weights=0.7,0.3
 # evaluate the tokenizer (report compression ratio etc.)
 python -m scripts.tok_eval
 
@@ -91,11 +93,12 @@ fi
 # At 250M chars/shard, this is 54B / 250M ~= 216 shards needed for pretraining.
 # Round up to 240 for safety. At ~100MB/shard, this downloads ~24GB of data to disk.
 # (The total number of shards available in the entire dataset is 1822.)
-echo "Waiting for dataset download to complete..."
-wait $DATASET_DOWNLOAD_PID
+echo "Waiting for dataset downloads to complete..."
+wait $PID1
+wait $PID2
 
 # pretrain the d20 model
-torchrun --standalone --nproc_per_node=8 -m scripts.base_train -- --depth=20 --run=$WANDB_RUN
+torchrun --standalone --nproc_per_node=8 -m scripts.base_train -- --depth=20 --datasets=karpathy,altai --dataset_weights=0.7,0.3 --run=$WANDB_RUN
 # evaluate the model on a larger chunk of train/val data and draw some samples
 torchrun --standalone --nproc_per_node=8 -m scripts.base_loss
 # evaluate the model on CORE tasks

@@ -231,7 +231,7 @@ class GPT(nn.Module):
         if rank == 0:
             print(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
         adam_groups = [
-            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale if not self.config_weight_sharing else unembedding_lr * dmodel_lr_scale),
+            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale if not self.config.weight_sharing else unembedding_lr * dmodel_lr_scale),
         ]
         if not self.config.weight_sharing:
             adam_groups.append(dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale))

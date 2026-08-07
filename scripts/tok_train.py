@@ -8,7 +8,7 @@ import argparse
 import torch
 from nanochat.tokenizer import RustBPETokenizer
 from nanochat.common import get_base_dir
-from nanochat.dataset import parquets_iter_batched
+from nanochat.dataset import interleaved_parquets_iter_batched
 
 # -----------------------------------------------------------------------------
 # Parse command line arguments
@@ -17,10 +17,16 @@ parser = argparse.ArgumentParser(description='Train a BPE tokenizer')
 parser.add_argument('--max_chars', type=int, default=10_000_000_000, help='Maximum characters to train on (default: 10B)')
 parser.add_argument('--doc_cap', type=int, default=10_000, help='Maximum characters per document (default: 10,000)')
 parser.add_argument('--vocab_size', type=int, default=65536, help='Vocabulary size (default: 65536 = 2^16)')
+parser.add_argument('--datasets', type=str, default="", help='Comma-separated dataset names (e.g. karpathy,altai)')
+parser.add_argument('--dataset_weights', type=str, default="", help='Comma-separated relative weights (e.g. 0.7,0.3)')
 args = parser.parse_args()
 print(f"max_chars: {args.max_chars:,}")
 print(f"doc_cap: {args.doc_cap:,}")
 print(f"vocab_size: {args.vocab_size:,}")
+if args.datasets:
+    print(f"datasets: {args.datasets}")
+if args.dataset_weights:
+    print(f"dataset_weights: {args.dataset_weights}")
 
 # -----------------------------------------------------------------------------
 # Text iterator
@@ -32,7 +38,9 @@ def text_iterator():
     3) Break when we've seen args.max_chars characters
     """
     nchars = 0
-    for batch in parquets_iter_batched(split="train"):
+    ds_arg = [d.strip() for d in args.datasets.split(",")] if args.datasets else None
+    weights_arg = [float(w.strip()) for w in args.dataset_weights.split(",")] if args.dataset_weights else None
+    for batch in interleaved_parquets_iter_batched(split="train", datasets=ds_arg, weights=weights_arg):
         for doc in batch:
             doc_text = doc
             if len(doc_text) > args.doc_cap:
