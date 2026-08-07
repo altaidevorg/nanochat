@@ -59,6 +59,8 @@ def list_parquet_files(dataset_name=None, data_dir=None):
             data_dir = os.path.join(MAIN_DATA_DIR, dataset_name)
         else:
             data_dir = MAIN_DATA_DIR
+    elif dataset_name and os.path.isdir(os.path.join(data_dir, dataset_name)):
+        data_dir = os.path.join(data_dir, dataset_name)
 
     if dataset_name is None and os.path.exists(data_dir):
         # Check if there are dataset subdirectories (e.g. karpathy/, altai/)
@@ -69,25 +71,27 @@ def list_parquet_files(dataset_name=None, data_dir=None):
         if subdirs:
             result = {}
             for sd in sorted(subdirs):
-                files = sorted(glob.glob(f"{os.path.join(data_dir, sd)}/*.parquet"))
+                files = sorted(glob.glob(os.path.join(data_dir, sd, "*.parquet")))
                 if files:
                     result[sd] = files
             if result:
                 return result
 
     # Single directory case
-    parquet_paths = sorted(glob.glob(f"{data_dir}/**/*.parquet"))
+    parquet_paths = sorted(glob.glob(os.path.join(data_dir, "**", "*.parquet"), recursive=True))
+    if not parquet_paths:
+        parquet_paths = sorted(glob.glob(os.path.join(data_dir, "*.parquet")))
     return parquet_paths
 
 
-def parquets_iter_batched(split, dataset_name=None, start=0, step=1):
+def parquets_iter_batched(split, dataset_name=None, data_dir=None, start=0, step=1):
     """
     Iterate through a dataset, yielding batches of underlying row_groups for efficiency.
     - split can be "train" or "val". The last parquet file of the dataset will be val.
     - start/step are useful for skipping rows in DDP. e.g. start=rank, step=world_size
     """
     assert split in ["train", "val"], "split must be 'train' or 'val'"
-    parquet_paths = list_parquet_files(dataset_name=dataset_name)
+    parquet_paths = list_parquet_files(dataset_name=dataset_name, data_dir=data_dir)
     if isinstance(parquet_paths, dict):
         # If multiple datasets found and none specified, flatten or pick first
         if dataset_name in parquet_paths:
@@ -115,7 +119,7 @@ def parquets_iter_batched(split, dataset_name=None, start=0, step=1):
 
 
 def interleaved_parquets_iter_batched(
-    split, datasets=None, weights=None, start=0, step=1, seed=42
+    split, datasets=None, weights=None, data_dir=None, start=0, step=1, seed=42
 ):
     """
     Weighted interleaving stream across multiple dataset iterators.
@@ -130,7 +134,7 @@ def interleaved_parquets_iter_batched(
 
     # Discover available datasets if not explicitly provided
     if datasets is None:
-        all_files = list_parquet_files()
+        all_files = list_parquet_files(data_dir=data_dir)
         if isinstance(all_files, dict):
             datasets = list(all_files.keys())
         else:
@@ -161,7 +165,7 @@ def interleaved_parquets_iter_batched(
         while True:
             has_data = False
             for batch in parquets_iter_batched(
-                split=split, dataset_name=ds_name, start=start, step=step
+                split=split, dataset_name=ds_name, data_dir=data_dir, start=start, step=step
             ):
                 has_data = True
                 yield batch

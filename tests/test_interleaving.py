@@ -61,16 +61,23 @@ class TestDatasetInterleaving(unittest.TestCase):
         self.assertTrue(all(d.startswith("en_doc_2_") for d in val_batches[0]))
 
     def test_interleaved_parquets_iter_batched(self):
-        # Stream 100 batches with 70/30 weights
+        # Stream 50 batches with 70/30 weights
         gen = interleaved_parquets_iter_batched(
             split="train",
             datasets=["karpathy", "altai"],
             weights=[0.7, 0.3],
+            data_dir=self.test_dir,
             seed=1234,
         )
-        # Note: interleaved_parquets_iter_batched uses MAIN_DATA_DIR by default,
-        # but we tested list_parquet_files above.
-        self.assertIsNotNone(gen)
+        batches = [next(gen) for _ in range(50)]
+        self.assertEqual(len(batches), 50)
+        
+        # Check that both English and Turkish documents are generated
+        en_count = sum(1 for b in batches if b[0].startswith("en_doc_"))
+        tr_count = sum(1 for b in batches if b[0].startswith("tr_doc_"))
+        self.assertGreater(en_count, 0)
+        self.assertGreater(tr_count, 0)
+        self.assertEqual(en_count + tr_count, 50)
 
 
 if __name__ == "__main__":

@@ -71,7 +71,7 @@ python -m nanochat.dataset --dataset altai -n 90 &
 PID2=$!
 
 # train the tokenizer with vocab size 2**16 = 65536 on ~2B characters of data
-python -m scripts.tok_train --max_chars=2500000000 --datasets=karpathy,altai --dataset_weights=0.7,0.3
+python -m scripts.tok_train --max_chars=2500000000 --datasets=karpathy,altai --dataset_weights=0.5,0.5
 # evaluate the tokenizer (report compression ratio etc.)
 python -m scripts.tok_eval
 
