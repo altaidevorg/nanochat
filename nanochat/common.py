@@ -5,7 +5,10 @@ Common utilities for nanochat.
 import os
 import re
 import logging
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import urllib.request
 import torch
 import torch.distributed as dist
@@ -74,7 +77,8 @@ def download_file_with_lock(url, filename):
 
         # Only a single rank can acquire this lock
         # All other ranks block until it is released
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
         if os.path.exists(file_path):
             return file_path
